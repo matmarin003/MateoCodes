@@ -40,6 +40,9 @@ def main():
     # Setup Power meter (GPIB board 0, address 4)
     # ---------------------------------------------------------------
     pwm = rm.open_resource('GPIB0::4::INSTR')
+    pwm.timeout = 5000            # ms; increase if reads still come back empty/timeout
+    pwm.read_termination = '\n'   # adjust if instrument uses '\r\n' or none
+    pwm.write_termination = '\n'
     pwm.write('sens2:pow:unit 1')       # units of power: 0 = dBm, 1 = Watts
     time.sleep(0.3)
     pwm.write('sens2:pow:rang:auto 2')  # enable auto-ranging
@@ -51,6 +54,9 @@ def main():
     # Setup Tunable Laser (GPIB board 0, address 20)
     # ---------------------------------------------------------------
     tls = rm.open_resource('GPIB0::20::INSTR')  # 20 for Agilent, 24 for HP
+    tls.timeout = 5000
+    tls.read_termination = '\n'
+    tls.write_termination = '\n'
     tls.write(f'POW {p} W')  # set laser output power
     time.sleep(2)
     tls.write('OUTP ON')
@@ -78,6 +84,13 @@ def main():
             # "NDCW+<value>" (matches the original MATLAB 'NDCW+%f' scan),
             # e.g. "NDCW+1.234E-03". Strip the "NDCW+" prefix before parsing.
             response = pwm.query('read2:pow?').strip()
+            print(f'  raw power meter reply: {response!r}')  # DEBUG - remove once format is confirmed
+
+            if response == '':
+                print('  WARNING: empty reply from power meter, skipping this point')
+                power_msr[i] = np.nan
+                continue
+
             value_str = response.split('NDCW+')[-1]
             power_msr[i] = float(value_str)
 
