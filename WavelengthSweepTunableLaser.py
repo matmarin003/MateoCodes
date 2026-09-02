@@ -1,128 +1,128 @@
 """
-TEST PROGRAM FOR OPENING AND CLOSING CONNECTIONS WITH DEVICES
-Python translation of Power_wl_meas.m
+WavelengthSweepTunableLaser.py
+-------------------------------
+Python port of ExistingControl/Filter response/Power_wl_meas.m.
 
-Performs a wavelength sweep on a tunable laser source, reading back power
-from a power meter at each wavelength step, then plots and saves the data.
+Sweeps the Agilent/HP tunable laser across a wavelength range while
+reading optical power with the Newport 1830-C power meter (instruments.py),
+then saves Wavelengths_nm / Power_W to CSV and plots the response.
 
-Requires: pyvisa, numpy, pandas, matplotlib
-    pip install pyvisa numpy pandas matplotlib
-You will also need a VISA backend (e.g. NI-VISA, or the pure-Python
-'pyvisa-py' backend) installed and able to see your GPIB interface.
+Runs on the bench PC, not this workstation.
 """
 
+import os
+import sys
 import time
+
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import pyvisa
 
-# -------------------------------------------------------------------------
-# Wavelength Definition
-# -------------------------------------------------------------------------
-wl_start = 1599.4   # beginning of wavelength (nm) sweep for tunable laser source
-wl_end = 1600.6     # end of wavelength (nm) sweep for tunable laser source
-res = 0.001         # resolution of sweep (nm)
+# instruments.py lives in the sibling ExistingControl/ directory.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "ExistingControl"))
 
-# np.arange can accumulate float error over many steps, so round to avoid drift
-n_steps = round((wl_end - wl_start) / res) + 1
-wavelengths = np.round(wl_start + np.arange(n_steps) * res, 6)
+from instruments import PowerMeter, append_csv_row  # noqa: E402
 
-p = 3  # output power of the device (mW)
 
-power_msr = np.full(wavelengths.shape, np.nan)  # preallocate measurement array
+# ============================================================
+# Run configuration
+# ============================================================
+
+WL_START_NM = 1599.4
+WL_END_NM = 1600.6
+WL_RES_NM = 0.001
+
+LASER_POWER_MW = 3.0
+
+LASER_ADDR = 20   # 20 = Agilent, 24 = HP
+PM_ADDR = 6       # Newport 1830-C
+
+LASER_SETTLE_S = 1.5   # after each WAVE command
+PM_SETTLE_S = 0.5      # after updating the meter's wavelength calibration
+
+ROBUST_READS_N = 7     # readings per point for read_power_robust_W (median)
+
+CSV_FILENAME = "wavelength_sweep_1599_1601nm_1pm.csv"
+
+
+def build_wavelengths(start_nm, end_nm, res_nm):
+    n_steps = int(round((end_nm - start_nm) / res_nm)) + 1
+    return np.round(start_nm + np.arange(n_steps) * res_nm, 6)
+
+
+def open_laser(addr):
+    rm = pyvisa.ResourceManager()
+    laser = rm.open_resource(f"GPIB0::{addr}::INSTR")
+    laser.timeout = 5000
+    laser.read_termination = "\n"
+    laser.write_termination = "\n"
+    return rm, laser
 
 
 def main():
-    rm = pyvisa.ResourceManager()  # equivalent of MATLAB's instrument driver layer
+    wavelengths = build_wavelengths(WL_START_NM, WL_END_NM, WL_RES_NM)
+    csv_path = os.path.join(os.getcwd(), CSV_FILENAME)
 
-    # ---------------------------------------------------------------
-    # Setup Power meter (GPIB board 0, address 4)
-    # ---------------------------------------------------------------
-    pwm = rm.open_resource('GPIB0::4::INSTR')
-    pwm.timeout = 5000            # ms; increase if reads still come back empty/timeout
-    pwm.read_termination = '\n'   # adjust if instrument uses '\r\n' or none
-    pwm.write_termination = '\n'
-    pwm.write('sens2:pow:unit 1')       # units of power: 0 = dBm, 1 = Watts
-    time.sleep(0.3)
-    pwm.write('sens2:pow:rang:auto 2')  # enable auto-ranging
-    time.sleep(0.3)
-    pwm.write(f'sens2:pow:wl{1600} nm')  # initial wavelength calibration
-    time.sleep(0.5)
+    pm = PowerMeter(PM_ADDR)
+    rm = None
+    laser = None
 
-    # ---------------------------------------------------------------
-    # Setup Tunable Laser (GPIB board 0, address 20)
-    # ---------------------------------------------------------------
-    tls = rm.open_resource('GPIB0::20::INSTR')  # 20 for Agilent, 24 for HP
-    tls.timeout = 5000
-    tls.read_termination = '\n'
-    tls.write_termination = '\n'
-    tls.write(f'POW {p} W')  # set laser output power
-    time.sleep(2)
-    tls.write('OUTP ON')
-
-    out_state = tls.query('OUTP?').strip()
-    if out_state == '1':
-        print('Laser output is on')
-    else:
-        raise RuntimeError('Output is off')
-
-    # ---------------------------------------------------------------
-    # Sweep wavelengths
-    # ---------------------------------------------------------------
     try:
+        pm.open()
+
+        rm, laser = open_laser(LASER_ADDR)
+        laser.write(f"POW {LASER_POWER_MW} W")
+        time.sleep(2.0)
+        laser.write("OUTP ON")
+
+        if laser.query("OUTP?").strip() == "1":
+            print("Laser output is on")
+        else:
+            raise RuntimeError("Laser output is off")
+
+        powers = np.full_like(wavelengths, np.nan, dtype=float)
+
         for i, wl_nm in enumerate(wavelengths):
-            print([wl_nm, i + 1])  # MATLAB used 1-based index; kept for parity
+            print(f"{wl_nm:.4f} nm  ({i + 1}/{len(wavelengths)})")
 
-            tls.write(f'WAVE {wl_nm * 1e-9:1.7e}')
-            time.sleep(1.5)
+            laser.write(f"WAVE {wl_nm * 1e-9:.7e}")
+            time.sleep(LASER_SETTLE_S)
 
-            pwm.write(f'sens2:pow:wave {wl_nm} nm')
-            time.sleep(0.5)
+            pm.set_wavelength(wl_nm)
+            time.sleep(PM_SETTLE_S)
 
-            # Query power reading. Instrument reply is expected in the form
-            # "NDCW+<value>" (matches the original MATLAB 'NDCW+%f' scan),
-            # e.g. "NDCW+1.234E-03". Strip the "NDCW+" prefix before parsing.
-            response = pwm.query('read2:pow?').strip()
-            print(f'  raw power meter reply: {response!r}')  # DEBUG - remove once format is confirmed
+            median_power, std_power, _ = pm.read_power_robust_W(n=ROBUST_READS_N)
+            powers[i] = median_power
+            append_csv_row(csv_path, ["Wavelengths_nm", "Power_W"],
+                           [wl_nm, powers[i]])
 
-            if response == '':
-                print('  WARNING: empty reply from power meter, skipping this point')
-                power_msr[i] = np.nan
-                continue
+        plt.figure()
+        plt.plot(wavelengths, powers, "-o")
+        plt.xlabel("Wavelength (nm)")
+        plt.ylabel("Power (W)")
+        plt.grid(True)
+        plt.show()
 
-            value_str = response.split('NDCW+')[-1]
-            power_msr[i] = float(value_str)
+        print(f"Data saved to: {csv_path}")
 
     finally:
-        # -------------------------------------------------------------
-        # Cleanup (always turn off laser & close connections, even on error)
-        # -------------------------------------------------------------
-        tls.write('OUTP Off')
-        tls.close()
-        pwm.close()
-
-    # ---------------------------------------------------------------
-    # Plot
-    # ---------------------------------------------------------------
-    plt.figure()
-    plt.plot(wavelengths, power_msr, '-o')
-    plt.xlabel('Wavelength (nm)')
-    plt.ylabel('Power (W)')
-    plt.grid(True)
-    plt.show()
-
-    # ---------------------------------------------------------------
-    # Save Data to CSV
-    # ---------------------------------------------------------------
-    df = pd.DataFrame({
-        'Wavelengths_nm': wavelengths,
-        'Power_W': power_msr,
-    })
-    filename = 'wavelength_sweep_1599_1601nm_1pm.csv'
-    df.to_csv(filename, index=False)
-    print(f'Data saved to: {filename}')
+        if laser is not None:
+            try:
+                laser.write("OUTP Off")
+            except Exception:
+                pass
+            try:
+                laser.close()
+            except Exception:
+                pass
+        if rm is not None:
+            try:
+                rm.close()
+            except Exception:
+                pass
+        pm.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
