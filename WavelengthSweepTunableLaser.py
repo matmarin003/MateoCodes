@@ -92,14 +92,17 @@ def main():
             append_csv_row(csv_path, ["Wavelengths_nm", "Power_W"],
                            [wl_nm, powers[i]])
 
+        png_path = os.path.join(os.getcwd(),
+                                CSV_FILENAME.replace(".csv", ".png"))
         plt.figure()
         plt.plot(wavelengths, powers, "-o")
         plt.xlabel("Wavelength (nm)")
         plt.ylabel("Power (W)")
         plt.grid(True)
-        plt.show()
+        plt.savefig(png_path, dpi=150)
 
         print(f"Data saved to: {csv_path}")
+        print(f"Graph saved to: {png_path}")
 
     finally:
         if laser is not None:
