@@ -11,18 +11,13 @@ Runs on the bench PC, not this workstation.
 """
 
 import os
-import sys
 import time
 
 import numpy as np
 import matplotlib.pyplot as plt
 import pyvisa
 
-# instruments.py lives in the sibling ExistingControl/ directory.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "..", "ExistingControl"))
-
-from instruments import PowerMeter, append_csv_row  # noqa: E402
+from instruments import PowerMeter, append_csv_row
 
 
 # ============================================================
