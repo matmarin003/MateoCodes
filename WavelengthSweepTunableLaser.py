@@ -97,9 +97,13 @@ def main():
         plt.figure()
         plt.plot(wavelengths, powers, "-o")
         plt.xlabel("Wavelength (nm)")
-        plt.ylabel("Power (W)")
+        plt.ylabel("Power (W)", labelpad=2)
+        ax = plt.gca()
+        ax.set_xticks([wavelengths[0],
+                       wavelengths[len(wavelengths) // 2],
+                       wavelengths[-1]])
         plt.grid(True)
-        plt.savefig(png_path, dpi=150)
+        plt.savefig(png_path, dpi=150, bbox_inches="tight")
 
         print(f"Data saved to: {csv_path}")
         print(f"Graph saved to: {png_path}")
