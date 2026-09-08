@@ -40,6 +40,13 @@ PM_SETTLE_S = 0.5      # after updating the meter's wavelength calibration
 
 ROBUST_READS_N = 7     # readings per point for read_power_robust_W (median)
 
+# The 1830-C occasionally drops a reply (empty response to D?).  Let the
+# meter's read routine retry (clearing its buffer between attempts) so a
+# transient miss doesn't abort a long sweep.
+PM_MAX_READ_RETRIES = 5
+PM_PRE_READ_DELAY_S = 0.05
+PM_POINT_RETRIES = 3     # outer retries for a whole wavelength point
+
 IL_DIR = os.path.join(REPO_ROOT, "results", "IL")
 
 CONDITIONS = [
@@ -91,7 +98,8 @@ def take_sweep(label, wavelengths):
 
     rm = None
     laser = None
-    pm = PowerMeter(PM_ADDR)
+    pm = PowerMeter(PM_ADDR, max_retries=PM_MAX_READ_RETRIES,
+                    pre_read_delay_s=PM_PRE_READ_DELAY_S)
     try:
         pm.open()
         rm, laser = open_laser(LASER_ADDR)
@@ -112,7 +120,22 @@ def take_sweep(label, wavelengths):
             pm.set_wavelength(wl_nm)
             time.sleep(PM_SETTLE_S)
 
-            median_power, _, _ = pm.read_power_robust_W(n=ROBUST_READS_N)
+            # Outer retry around the whole 7-reading robust read, so a point
+            # that still fails after the per-read retries gets a fresh attempt
+            # instead of aborting the entire sweep.
+            last_err = None
+            median_power = None
+            for _ in range(PM_POINT_RETRIES):
+                try:
+                    median_power, _, _ = pm.read_power_robust_W(n=ROBUST_READS_N)
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(f"    point read failed ({e}); retrying...")
+                    time.sleep(0.5)
+            if median_power is None:
+                raise last_err
+
             powers_w[i] = median_power
             append_csv_row(csv_path, ["Wavelengths_nm", "Power_dBm"],
                            [wl_nm, to_dBm(median_power)])
