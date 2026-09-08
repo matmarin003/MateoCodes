@@ -4,10 +4,10 @@ IL.py
 Interactive WSS insertion-loss measurement.
 
 Prompts the operator (key 1-4) to take wavelength sweeps for a baseline with the
-WSS disconnected and for the WSS set to 50 / 20 / 10 GHz bandwidths (set in the
+WSS disconnected and for the WSS set to 20 / 10 / 5 GHz bandwidths (set in the
 external WSS software).  Each sweep is saved to CSV immediately in dBm so a long
-run is never lost.  Key 5 loads the saved sweeps and plots insertion loss
-(ref - condition, in dB) on a single figure.
+run is never lost.  Key 5 plots the saved sweeps as two figures: the WSS output
+power in dBm (raw) and the insertion loss in dB (reference - condition).
 
 Runs on the bench PC, not this workstation.
 """
@@ -45,9 +45,9 @@ IL_DIR = os.path.join(REPO_ROOT, "results", "IL")
 CONDITIONS = [
     # (menu key, label, bandwidth note used only for prompting)
     ("1", "reference", "baseline, WSS DISCONNECTED"),
-    ("2", "50GHz", "WSS connected, 50 GHz bandwidth"),
-    ("3", "20GHz", "WSS connected, 20 GHz bandwidth"),
-    ("4", "10GHz", "WSS connected, 10 GHz bandwidth"),
+    ("2", "20GHz", "WSS connected, 20 GHz bandwidth"),
+    ("3", "10GHz", "WSS connected, 10 GHz bandwidth"),
+    ("4", "5GHz", "WSS connected, 5 GHz bandwidth"),
 ]
 
 COND_FILENAMES = {label: f"il_{label}_dBm.csv" for _, label, _ in CONDITIONS}
@@ -137,8 +137,33 @@ def take_sweep(label, wavelengths):
         pm.close()
 
 
+def present_wss_conditions():
+    """Return [(label, note, data)] for each WSS condition CSV that exists."""
+    result = []
+    for key, label, note in CONDITIONS:
+        if key == "1":
+            continue
+        cond = read_condition_file(label)
+        if cond is None:
+            print(f"No data for {label} ({note}). Skipping.")
+            continue
+        result.append((label, note, cond))
+    return result
+
+
+def format_axes(ax, wavelengths, ylabel, title):
+    ax.set_xlabel("Wavelength (nm)")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks([wavelengths[0],
+                   wavelengths[len(wavelengths) // 2],
+                   wavelengths[-1]])
+    ax.grid(True)
+    ax.legend(title="Bandwidth")
+    ax.set_title(title)
+
+
 def plot_il():
-    """Load saved sweeps and plot insertion loss for each present condition."""
+    """Plot insertion loss (ref - condition, in dB) for each present WSS curve."""
     ref = read_condition_file("reference")
     if ref is None:
         print("No reference sweep found. Press 1 first (WSS disconnected).")
@@ -149,33 +174,43 @@ def plot_il():
 
     fig, ax = plt.subplots()
     plotted_any = False
-    for key, label, note in CONDITIONS:
-        if key == "1":
-            continue
-        cond = read_condition_file(label)
-        if cond is None:
-            print(f"No data for {label} ({note}). Skipping.")
-            continue
+    for label, note, cond in present_wss_conditions():
         if len(cond) != len(ref):
             print(f"Length mismatch for {label}; skipping.")
             continue
         il_db = ref_dbm - cond[:, 1]
-        ax.plot(wavelengths, il_db, "-o", label=label)
+        ax.plot(wavelengths, il_db, label=label)
         plotted_any = True
 
     if not plotted_any:
         print("No condition sweeps found to plot (press 2/3/4 first).")
         return
 
-    ax.set_xlabel("Wavelength (nm)")
-    ax.set_ylabel("Insertion loss (dB)")
-    ax.set_xticks([wavelengths[0],
-                   wavelengths[len(wavelengths) // 2],
-                   wavelengths[-1]])
-    ax.grid(True)
-    ax.legend(title="Bandwidth")
-
+    format_axes(ax, wavelengths, "Insertion loss (dB)",
+                "WSS insertion loss vs reference")
     fig_path = os.path.join(IL_DIR, f"IL_{time.strftime('%Y%m%d_%H%M%S')}.png")
+    os.makedirs(IL_DIR, exist_ok=True)
+    fig.savefig(fig_path, dpi=150, bbox_inches="tight")
+    print(f"Graph saved to: {fig_path}")
+    plt.show()
+
+
+def plot_wss_dbm():
+    """Plot raw power after the WSS (in dBm) for each present WSS curve."""
+    conds = present_wss_conditions()
+    if not conds:
+        print("No condition sweeps found to plot (press 2/3/4 first).")
+        return
+
+    wavelengths = conds[0][2][:, 0]
+    fig, ax = plt.subplots()
+    for label, note, cond in conds:
+        ax.plot(cond[:, 0], cond[:, 1], label=label)
+
+    format_axes(ax, wavelengths, "Power after WSS (dBm)",
+                "WSS output power")
+    fig_path = os.path.join(IL_DIR,
+                            f"WSS_power_dBm_{time.strftime('%Y%m%d_%H%M%S')}.png")
     os.makedirs(IL_DIR, exist_ok=True)
     fig.savefig(fig_path, dpi=150, bbox_inches="tight")
     print(f"Graph saved to: {fig_path}")
@@ -186,10 +221,10 @@ def menu():
     print("\n=== WSS Insertion Loss ===\n")
     print("Set up each measurement, then press the key:")
     print("  1  Baseline sweep  (WSS DISCONNECTED, input fiber straight to meter)")
-    print("  2  WSS sweep @ 50 GHz  (set bandwidth in WSS software first)")
-    print("  3  WSS sweep @ 20 GHz")
-    print("  4  WSS sweep @ 10 GHz")
-    print("  5  Plot insertion loss from saved sweeps")
+    print("  2  WSS sweep @ 20 GHz  (set bandwidth in WSS software first)")
+    print("  3  WSS sweep @ 10 GHz")
+    print("  4  WSS sweep @ 5 GHz")
+    print("  5  Plot saved sweeps (IL and power-after-WSS dBm graphs)")
     print("  q  Quit")
     return input("> ").strip().lower()
 
@@ -209,6 +244,7 @@ def main():
             print(f"\nStarting: {note}")
             take_sweep(label, wavelengths)
         elif choice == "5":
+            plot_wss_dbm()
             plot_il()
         else:
             print("Unknown key.")
