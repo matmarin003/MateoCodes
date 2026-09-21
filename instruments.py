@@ -154,25 +154,63 @@ class PowerMeter:
         self.rm = None
         self.inst = None
 
-    def open(self):
-        self.rm = pyvisa.ResourceManager()
-        self.inst = self.rm.open_resource(
-            f"GPIB0::{self.addr}::INSTR",
-            access_mode=AccessModes.no_lock,
-            open_timeout=2000
-        )
-        self.inst.timeout = self.timeout_ms
-        self.inst.read_termination = "\n"
-        self.inst.write_termination = "\n"
+    def open(self, open_retries=3, retry_wait_s=1.0):
+        last_err = None
+        for attempt in range(1, open_retries + 1):
+            self.rm = None
+            self.inst = None
+            try:
+                self.rm = pyvisa.ResourceManager()
+                self.inst = self.rm.open_resource(
+                    f"GPIB0::{self.addr}::INSTR",
+                    access_mode=AccessModes.no_lock,
+                    open_timeout=2000
+                )
+                self.inst.timeout = self.timeout_ms
+                self.inst.read_termination = "\n"
+                self.inst.write_termination = "\n"
 
-        self.inst.clear()
-        time.sleep(1.0)
+                try:
+                    self.inst.clear()
+                except pyvisa.errors.VisaIOError as e:
+                    print(f"  [PowerMeter.open] clear() failed "
+                          f"(attempt {attempt}/{open_retries}): {e}")
+                time.sleep(1.0)
 
-        self.inst.write("C")
-        time.sleep(0.5)
+                self.inst.write("C")
+                time.sleep(0.5)
 
-        print(f"PM ready (Newport 1830-C @ GPIB {self.addr})")
-        return self
+                print(f"PM ready (Newport 1830-C @ GPIB {self.addr})")
+                return self
+            except pyvisa.errors.VisaIOError as e:
+                last_err = e
+                print(f"  [PowerMeter.open] attempt {attempt}/{open_retries} "
+                      f"failed: {e}")
+                self._close_partial()
+                if attempt < open_retries:
+                    time.sleep(retry_wait_s)
+
+        raise RuntimeError(
+            f"Could not open the Newport 1830-C at GPIB0::{self.addr}::INSTR "
+            f"after {open_retries} attempts. Check that the meter is powered on, "
+            f"the GPIB address is {self.addr}, and the cable is seated; close any "
+            f"other GPIB software. If the bus is wedged from a previous run, "
+            f"power-cycle the 1830-C."
+        ) from last_err
+
+    def _close_partial(self):
+        try:
+            if self.inst is not None:
+                self.inst.close()
+        except Exception:
+            pass
+        try:
+            if self.rm is not None:
+                self.rm.close()
+        except Exception:
+            pass
+        self.inst = None
+        self.rm = None
 
     def close(self):
         try:

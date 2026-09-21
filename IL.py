@@ -101,7 +101,15 @@ def take_sweep(label, wavelengths):
     pm = PowerMeter(PM_ADDR, max_retries=PM_MAX_READ_RETRIES,
                     pre_read_delay_s=PM_PRE_READ_DELAY_S)
     try:
-        pm.open()
+        try:
+            pm.open()
+        except Exception as e:
+            print(f"\nCould not open the power meter: {e}")
+            print("Check that the meter is powered on, at GPIB address "
+                  f"{PM_ADDR}, and the cable is seated; close any other GPIB "
+                  "software. If the bus is wedged from a previous run, "
+                  "power-cycle the 1830-C.")
+            return None
         rm, laser = open_laser(LASER_ADDR)
         laser.write(f"POW {LASER_POWER_MW} W")
         time.sleep(2.0)
